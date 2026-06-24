@@ -2,9 +2,11 @@ name: OBS Not Botu
 
 on:
   schedule:
-    # Her 15 dakikada bir çalışır (UTC saatine göre; GitHub yoğunlukta birkaç
-    # dakika gecikebilir). Daha sık istersen */10 yapabilirsin.
-    - cron: "*/15 * * * *"
+    # GitHub'ın izin verdiği EN SIK aralık 5 dakikadır (3 dk mümkün değil).
+    # Yoğun saatlerde GitHub birkaç dakika geciktirebilir.
+    # PRIVATE depoda her 5 dk ~3-4 gün, her 15 dk ise ~10+ gün ücretsiz yeter.
+    # PUBLIC depoda sınırsız ücretsizdir.
+    - cron: "*/5 * * * *"
   workflow_dispatch:   # GitHub arayüzünden elle de tetikleyebilmek için
 
 # Bot, durum dosyasını depoya geri yazabilsin diye yazma izni gerekiyor.
