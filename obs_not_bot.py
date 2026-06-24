@@ -23,6 +23,7 @@ import json
 import time
 import hashlib
 import logging
+import threading
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -186,11 +187,15 @@ def notlari_parse(html):
 # ----------------------------------------------------------------------
 # TELEGRAM BİLDİRİM
 # ----------------------------------------------------------------------
-def bildir(mesaj):
+# Her kişinin SON okunan (okunabilir) notları burada tutulur; /durum komutu
+# bunu anında yazar. Örn: {"Mert": {ders: {...}}, "Falanca Kişi": {...}}
+SON_NOTLAR = {}
+
+def bildir(mesaj, chat=None):
     try:
         requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            data={"chat_id": TG_CHAT, "text": mesaj},
+            data={"chat_id": chat or TG_CHAT, "text": mesaj},
             timeout=30,
         )
         log.info("Telegram bildirimi gönderildi.")
@@ -265,6 +270,7 @@ def _ozet_mesaji(notlar, baslik):
 
 def degisiklik_kontrol(kisi, yeni):
     ad = kisi["ad"]
+    SON_NOTLAR[ad] = yeni          # /durum komutu için son okunan notları sakla
     state = eski_durum(ad)
     eski_notlar = state.get("notlar", {})
     son_saatlik = state.get("son_saatlik")
@@ -312,6 +318,7 @@ def degisiklik_kontrol(kisi, yeni):
 # ANA DÖNGÜ
 # ----------------------------------------------------------------------
 def tek_kisi_kontrol(kisi):
+    """Tek bir kişinin notlarını kontrol edip gerekirse bildirim atar."""
     ad = kisi["ad"]
     try:
         html = not_sayfasi_html(kisi["user"], kisi["pass"])
@@ -331,9 +338,76 @@ def tek_kontrol():
         tek_kisi_kontrol(kisi)
 
 
+# ----------------------------------------------------------------------
+# /durum KOMUTU DİNLEME
+# ----------------------------------------------------------------------
+# Telegram'dan en son işlenen güncelleme kimliği (aynı komutu tekrar tekrar
+# yanıtlamamak için).
+_son_update_id = None
+
+def _durum_cevabi():
+    """Son bilinen notlardan herkesin durumunu tek mesaja toplar."""
+    if not SON_NOTLAR:
+        return "Henüz not bilgisi alınmadı, birazdan tekrar dene."
+    parcalar = []
+    for ad, notlar in SON_NOTLAR.items():
+        parcalar.append(_ozet_mesaji(notlar, f"📋 {ad} — Son bilinen durum"))
+    return "\n\n———\n\n".join(parcalar)
+
+
+def komut_dinle_dongu():
+    """Ayrı thread'de sürekli çalışır; /durum komutuna anında cevap verir.
+    Long polling kullanır, böylece ana döngü OBS'yle meşgulken bile komutları
+    kesintisiz dinler."""
+    global _son_update_id
+    # Açılışta birikmiş eski komutları atla
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+            params={"timeout": 0}, timeout=20,
+        )
+        data = r.json()
+        if data.get("ok") and data.get("result"):
+            _son_update_id = data["result"][-1]["update_id"]
+    except Exception as e:
+        log.error("Komut dinleyici başlangıç hatası: %s", e)
+
+    while True:
+        try:
+            params = {"timeout": 25}     # 25 sn uzun bekleme (long polling)
+            if _son_update_id is not None:
+                params["offset"] = _son_update_id + 1
+            r = requests.get(
+                f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                params=params, timeout=35,
+            )
+            data = r.json()
+            if not data.get("ok"):
+                time.sleep(3)
+                continue
+            for upd in data.get("result", []):
+                _son_update_id = upd["update_id"]
+                msg = upd.get("message") or upd.get("channel_post") or {}
+                metin = (msg.get("text") or "").strip().lower()
+                gelen_chat = str(msg.get("chat", {}).get("id", ""))
+                if gelen_chat != str(TG_CHAT):
+                    continue
+                if metin == "/durum" or metin.startswith("/durum@"):
+                    log.info("/durum komutu alındı, cevap gönderiliyor.")
+                    bildir(_durum_cevabi())
+        except Exception as e:
+            log.error("Komut dinleme hatası: %s", e)
+            time.sleep(3)
+
+
 def main():
     log.info("Bot başladı. Her %d saniyede bir, %d kişi kontrol edilecek.",
              INTERVAL_SEC, len(KISILER))
+    # Komut dinleyiciyi ayrı thread'de başlat (OBS kontrolünden bağımsız çalışır)
+    t = threading.Thread(target=komut_dinle_dongu, daemon=True)
+    t.start()
+
+    # Ana döngü: belirli aralıklarla not kontrolü
     while True:
         try:
             tek_kontrol()
