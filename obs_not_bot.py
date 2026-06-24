@@ -38,15 +38,12 @@ except Exception:
 # ----------------------------------------------------------------------
 # AYARLAR
 # ----------------------------------------------------------------------
-# Telegram bilgileri (tek bot, tek alıcı = sen).
+# Telegram bot token'ı ve hedef. Tüm mesajlar tek bir yere (gruba) gider.
 TG_TOKEN = os.environ.get("TG_TOKEN", "botfather_token")
-TG_CHAT  = os.environ.get("TG_CHAT",  "1560146067")     # mesajların geleceği chat_id
+TG_CHAT  = os.environ.get("TG_CHAT",  "-5539007255")     # "Ders Notu" grubunun id'si
 
-# Takip edilecek kişiler. Her kişi için: ad, OBS öğrenci no, OBS şifresi.
-# İstediğin kadar kişi ekleyebilirsin. ÖNEMLİ: şifreleri rızayla ekle ve
-# bu dosyayı kimseyle paylaşma / public GitHub'a koyma.
-# Değerleri ortam değişkeninden (systemd) de verebilirsin; verilmezse
-# aşağıdaki sabit değerler kullanılır.
+# Takip edilecek kişiler. Her kişi için: ad, OBS no, OBS şifresi.
+# Mesajların hepsi yukarıdaki gruba düşer; mesaj başında kimin notu olduğu yazar.
 KISILER = [
     {
         "ad":   "Mert",
