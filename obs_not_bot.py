@@ -312,7 +312,6 @@ def degisiklik_kontrol(kisi, yeni):
 # ANA DÖNGÜ
 # ----------------------------------------------------------------------
 def tek_kisi_kontrol(kisi):
-    """Tek bir kişinin notlarını kontrol edip gerekirse bildirim atar."""
     ad = kisi["ad"]
     try:
         html = not_sayfasi_html(kisi["user"], kisi["pass"])
