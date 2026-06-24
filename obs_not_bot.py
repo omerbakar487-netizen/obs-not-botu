@@ -190,6 +190,29 @@ def notlari_parse(html):
 # Her kişinin SON okunan (okunabilir) notları burada tutulur; /durum komutu
 # bunu anında yazar. Örn: {"Mert": {ders: {...}}, "Falanca Kişi": {...}}
 SON_NOTLAR = {}
+SON_NOTLAR_DOSYA = "son_notlar.json"   # restart sonrası da /durum çalışsın diye
+
+
+def son_notlar_kaydet():
+    """Bellekteki son notları diske yazar (restart'a dayanıklı olsun diye)."""
+    try:
+        with open(SON_NOTLAR_DOSYA, "w", encoding="utf-8") as f:
+            json.dump(SON_NOTLAR, f, ensure_ascii=False)
+    except Exception as e:
+        log.error("Son notlar diske yazılamadı: %s", e)
+
+
+def son_notlar_yukle():
+    """Açılışta diskteki son notları belleğe yükler."""
+    global SON_NOTLAR
+    try:
+        if os.path.exists(SON_NOTLAR_DOSYA):
+            with open(SON_NOTLAR_DOSYA, encoding="utf-8") as f:
+                SON_NOTLAR = json.load(f)
+            log.info("Diskteki son notlar yüklendi (%d kişi).", len(SON_NOTLAR))
+    except Exception as e:
+        log.error("Son notlar yüklenemedi: %s", e)
+
 
 def bildir(mesaj, chat=None):
     try:
@@ -290,6 +313,7 @@ def _ozet_mesaji(notlar, baslik):
 def degisiklik_kontrol(kisi, yeni):
     ad = kisi["ad"]
     SON_NOTLAR[ad] = yeni          # /durum komutu için son okunan notları sakla
+    son_notlar_kaydet()           # diske de yaz (restart'a dayanıklı)
     state = eski_durum(ad)
     eski_notlar = state.get("notlar", {})
     son_saatlik = state.get("son_saatlik")
@@ -372,7 +396,10 @@ _son_update_id = None
 def _durum_cevabi():
     """Son bilinen notlardan herkesin durumunu tek mesaja toplar."""
     if not SON_NOTLAR:
-        return "Henüz not bilgisi alınmadı, birazdan tekrar dene."
+        son_notlar_yukle()        # bellek boşsa diskten yüklemeyi dene
+    if not SON_NOTLAR:
+        return ("Henüz not bilgisi alınmadı (bot yeni başlamış olabilir). "
+                "Bir dakika içinde tekrar dene.")
     parcalar = []
     for ad, notlar in SON_NOTLAR.items():
         parcalar.append(_ozet_mesaji(notlar, f"📋 {ad} — Son bilinen durum"))
@@ -424,12 +451,25 @@ def komut_dinle_dongu():
             time.sleep(3)
 
 
+def _komut_dinleyici_baslat():
+    """Komut dinleyiciyi thread'de başlatır; çökerse otomatik yeniden başlatır."""
+    def sarmal():
+        while True:
+            try:
+                komut_dinle_dongu()
+            except Exception as e:
+                log.error("Komut dinleyici thread çöktü, yeniden başlatılıyor: %s", e)
+                time.sleep(5)
+    t = threading.Thread(target=sarmal, daemon=True)
+    t.start()
+
+
 def main():
     log.info("Bot başladı. Her %d saniyede bir, %d kişi kontrol edilecek.",
              INTERVAL_SEC, len(KISILER))
-    # Komut dinleyiciyi ayrı thread'de başlat (OBS kontrolünden bağımsız çalışır)
-    t = threading.Thread(target=komut_dinle_dongu, daemon=True)
-    t.start()
+    son_notlar_yukle()    # restart sonrası /durum hemen cevap verebilsin
+    # Komut dinleyiciyi ayrı thread'de başlat (çökerse kendini toparlar)
+    _komut_dinleyici_baslat()
 
     # Ana döngü: belirli aralıklarla not kontrolü
     while True:
