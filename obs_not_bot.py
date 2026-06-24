@@ -54,9 +54,12 @@ KISILER = [
         "pass": os.environ.get("OBS_PASS", "obs_sifren"),
     },
     {
-        "ad":   "Arkadas",                      # arkadaşının adını yaz
+        "ad":   "Sehpa",
         "user": os.environ.get("OBS2_USER", "arkadas_ogrenci_no"),
         "pass": os.environ.get("OBS2_PASS", "arkadas_sifre"),
+        # Bu kişiye özel mesaj başlıkları (isteğe bağlı):
+        "kos_baslik":    "🚨 Koş Sehpa KOOOOŞ 🚨 notun açıklandı",
+        "stabil_baslik": "Sehpanın not durumu stabil",
     },
 ]
 
@@ -263,14 +266,19 @@ def _ozet_mesaji(notlar, baslik):
     return "\n".join(satirlar)
 
 
-def degisiklik_kontrol(kisi_ad, yeni):
-    state = eski_durum(kisi_ad)
+def degisiklik_kontrol(kisi, yeni):
+    ad = kisi["ad"]
+    state = eski_durum(ad)
     eski_notlar = state.get("notlar", {})
     son_saatlik = state.get("son_saatlik")
     ilk_calisma = (len(eski_notlar) == 0)
 
     yeni_ozet = {ders: _ozet(v) for ders, v in yeni.items()}
     degisenler = [d for d in yeni if eski_notlar.get(d) != yeni_ozet[d]]
+
+    # Kişiye özel mesaj başlıkları (tanımlı değilse normal şablon kullanılır)
+    kos_baslik    = kisi.get("kos_baslik",    f"🚨 {ad} — Yeni Sınav Açıklandı KOŞŞŞ 🚨")
+    stabil_baslik = kisi.get("stabil_baslik", f"✅ {ad} — yeni bir gelişme yok")
 
     now = datetime.now(TR)
     saat_str = now.strftime("%Y-%m-%dT%H")
@@ -279,28 +287,28 @@ def degisiklik_kontrol(kisi_ad, yeni):
 
     if ilk_calisma:
         # İlk turda mevcut durumu özetle, saat sayacını da başlat.
-        bildir(_ozet_mesaji(yeni, f"📋 {kisi_ad} — Güncel not durumu"))
-        durum_kaydet(kisi_ad, yeni_ozet, saat_str)
-        log.info("[%s] İlk çalışma: mevcut durum özetlendi ve gönderildi.", kisi_ad)
+        bildir(_ozet_mesaji(yeni, f"📋 {ad} — Güncel not durumu"))
+        durum_kaydet(ad, yeni_ozet, saat_str)
+        log.info("[%s] İlk çalışma: mevcut durum özetlendi ve gönderildi.", ad)
         return
 
-    # 1) ANLIK: yeni/değişen not varsa hemen "KOŞŞŞ" bildir (her turda, saatten bağımsız)
+    # 1) ANLIK: yeni/değişen not varsa hemen "KOŞ" bildir (her turda, saatten bağımsız)
     for ders in degisenler:
         v = yeni[ders]
-        bildir(f"🚨 {kisi_ad} — Yeni Sınav Açıklandı KOŞŞŞ 🚨\n\n" + _ders_satiri(ders, v))
-        log.info("[%s] Değişiklik: %s", kisi_ad, ders)
+        bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v))
+        log.info("[%s] Değişiklik: %s", ad, ders)
 
     # 2) SAATLİK: 09:00-00:00 arası, her yeni saatte bir durum güncellemesi
     if saatlik_aktif and son_saatlik != saat_str:
         if degisenler:
-            baslik = f"📋 {kisi_ad} — Saatlik durum ({now:%H:00}) — yeni not(lar) açıklandı! 🚨"
+            baslik = f"{kos_baslik} ({now:%H:00})"
         else:
-            baslik = f"✅ {kisi_ad} — Saatlik durum ({now:%H:00}) — yeni bir gelişme yok"
+            baslik = f"{stabil_baslik} ({now:%H:00})"
         bildir(_ozet_mesaji(yeni, baslik))
         son_saatlik = saat_str
-        log.info("[%s] Saatlik durum mesajı gönderildi (%s).", kisi_ad, saat_str)
+        log.info("[%s] Saatlik durum mesajı gönderildi (%s).", ad, saat_str)
 
-    durum_kaydet(kisi_ad, yeni_ozet, son_saatlik)
+    durum_kaydet(ad, yeni_ozet, son_saatlik)
 
 
 # ----------------------------------------------------------------------
@@ -316,7 +324,7 @@ def tek_kisi_kontrol(kisi):
             log.warning("[%s] Not tablosu alınamadı, atlanıyor.", ad)
             return
         log.info("[%s] %d ders okundu.", ad, len(notlar))
-        degisiklik_kontrol(ad, notlar)
+        degisiklik_kontrol(kisi, notlar)
     except Exception as e:
         log.error("[%s] Hata: %s", ad, e)
 
