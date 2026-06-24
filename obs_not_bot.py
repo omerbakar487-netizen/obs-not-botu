@@ -51,12 +51,12 @@ KISILER = [
         "pass": os.environ.get("OBS_PASS", "obs_sifren"),
     },
     {
-        "ad":   "Sehpa",
+        "ad":   "Falanca Kişi",
         "user": os.environ.get("OBS2_USER", "arkadas_ogrenci_no"),
         "pass": os.environ.get("OBS2_PASS", "arkadas_sifre"),
         # Bu kişiye özel mesaj başlıkları (isteğe bağlı):
-        "kos_baslik":    "🚨 Koş Sehpa KOOOOŞ 🚨 notun açıklandı",
-        "stabil_baslik": "Sehpanın not durumu stabil",
+        "kos_baslik":    "🚨 Koş Falanca Kişi KOOOOŞ 🚨 notun açıklandı",
+        "stabil_baslik": "Falanca Kişinin not durumu stabil",
     },
 ]
 
