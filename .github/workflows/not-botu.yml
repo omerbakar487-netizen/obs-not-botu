@@ -1,0 +1,67 @@
+name: OBS Not Botu
+
+on:
+  schedule:
+    # Her 15 dakikada bir çalışır (UTC saatine göre; GitHub yoğunlukta birkaç
+    # dakika gecikebilir). Daha sık istersen */10 yapabilirsin.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:   # GitHub arayüzünden elle de tetikleyebilmek için
+
+# Bot, durum dosyasını depoya geri yazabilsin diye yazma izni gerekiyor.
+permissions:
+  contents: write
+
+# Aynı anda iki çalışmanın çakışmaması için.
+concurrency:
+  group: obs-not-botu
+  cancel-in-progress: false
+
+jobs:
+  kontrol:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pip önbelleği
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}
+
+      - name: Playwright tarayıcı önbelleği
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}
+
+      - name: Bağımlılıkları kur
+        run: |
+          pip install playwright beautifulsoup4 requests
+          python -m playwright install --with-deps chromium
+
+      - name: Botu bir kez çalıştır
+        env:
+          OBS_USER: ${{ secrets.OBS_USER }}
+          OBS_PASS: ${{ secrets.OBS_PASS }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT:  ${{ secrets.TG_CHAT }}
+          RUN_ONCE: "1"
+        run: python obs_not_bot.py
+
+      - name: Durum değiştiyse depoya kaydet
+        run: |
+          if [ -n "$(git status --porcelain son_durum.json)" ]; then
+            git config user.name "obs-not-botu"
+            git config user.email "bot@users.noreply.github.com"
+            git add son_durum.json
+            git commit -m "durum guncellendi"
+            git push
+          else
+            echo "Değişiklik yok, kaydedilecek bir şey yok."
+          fi
