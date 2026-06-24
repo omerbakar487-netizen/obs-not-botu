@@ -24,8 +24,16 @@ import time
 import hashlib
 import logging
 import requests
+from datetime import datetime
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+
+try:
+    from zoneinfo import ZoneInfo
+    TR = ZoneInfo("Europe/Istanbul")
+except Exception:
+    from datetime import timezone, timedelta
+    TR = timezone(timedelta(hours=3))   # yedek: sabit UTC+3
 
 # ----------------------------------------------------------------------
 # AYARLAR
@@ -181,18 +189,24 @@ def bildir(mesaj):
 # DURUM KAYDI (JSON)
 # ----------------------------------------------------------------------
 def eski_durum():
+    """{"notlar": {ders: hash}, "son_saatlik": "YYYY-MM-DDTHH"} döndürür.
+    Eski düz format ({ders: hash}) ile de uyumludur."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, encoding="utf-8") as f:
-                return json.load(f)
+                d = json.load(f)
+            if isinstance(d, dict) and "notlar" in d:
+                return d
+            return {"notlar": d, "son_saatlik": None}   # eski düz format
         except Exception:
-            return {}
-    return {}
+            return {"notlar": {}, "son_saatlik": None}
+    return {"notlar": {}, "son_saatlik": None}
 
 
-def durum_kaydet(notlar):
+def durum_kaydet(notlar_ozet, son_saatlik):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(notlar, f, ensure_ascii=False, indent=2)
+        json.dump({"notlar": notlar_ozet, "son_saatlik": son_saatlik},
+                  f, ensure_ascii=False, indent=2)
 
 
 # ----------------------------------------------------------------------
@@ -206,45 +220,68 @@ def _ozet(v):
     return hashlib.sha256(metin.encode("utf-8")).hexdigest()
 
 
+def _ders_satiri(ders, v):
+    return (f"{ders} - {v['ad']}\n"
+            f"Durum: {v['durum']}\n"
+            f"{v['sinav']}\n"
+            f"Ort: {v['ort'] or '-'}   Harf: {v['harf'] or '-'}")
+
+
+def _ozet_mesaji(notlar, baslik):
+    satirlar = [baslik + "\n"]
+    final_var = False
+    for ders, v in notlar.items():
+        satirlar.append(f"• {ders} - {v['ad']}\n  {v['sinav']}  "
+                        f"(Harf: {v['harf'] or '-'})")
+        s = v["sinav"].lower()
+        if "final" in s and "--" not in s.split("final")[-1]:
+            final_var = True
+    if final_var:
+        satirlar.append("\nℹ️ Bazı derslerde final/sonuç notu görünüyor.")
+    else:
+        satirlar.append("\nℹ️ Şu anda sadece vize notları var, final/sonuç "
+                        "notu henüz açıklanmamış.")
+    return "\n".join(satirlar)
+
+
 def degisiklik_kontrol(yeni):
-    eski = eski_durum()                 # {ders: hash}
-    ilk_calisma = (len(eski) == 0)
+    state = eski_durum()
+    eski_notlar = state.get("notlar", {})
+    son_saatlik = state.get("son_saatlik")
+    ilk_calisma = (len(eski_notlar) == 0)
+
     yeni_ozet = {ders: _ozet(v) for ders, v in yeni.items()}
+    degisenler = [d for d in yeni if eski_notlar.get(d) != yeni_ozet[d]]
+
+    now = datetime.now(TR)
+    saat_str = now.strftime("%Y-%m-%dT%H")
+    # Saatlik durum mesajı penceresi: 09:00 - 00:00 (yani saat 9..23 ve 00)
+    saatlik_aktif = (now.hour >= 9) or (now.hour == 0)
 
     if ilk_calisma:
-        # İlk turda mevcut durumun tamamını tek mesajda özetle.
-        satirlar = ["📋 Güncel not durumu\n"]
-        final_var = False
-        for ders, v in yeni.items():
-            satirlar.append(f"• {ders} - {v['ad']}\n  {v['sinav']}  "
-                            f"(Harf: {v['harf'] or '-'})")
-            s = v["sinav"].lower()
-            if "final" in s and "--" not in s.split("final")[-1]:
-                final_var = True
-
-        if final_var:
-            satirlar.append("\nℹ️ Bazı derslerde final/sonuç notu da görünüyor.")
-        else:
-            satirlar.append("\nℹ️ Şu anda sadece vize notları var, final/sonuç "
-                            "notu henüz açıklanmamış.")
-
-        bildir("\n".join(satirlar))
-        durum_kaydet(yeni_ozet)
+        # İlk turda mevcut durumu özetle, saat sayacını da başlat.
+        bildir(_ozet_mesaji(yeni, "📋 Güncel not durumu"))
+        durum_kaydet(yeni_ozet, saat_str)
         log.info("İlk çalışma: mevcut durum özetlendi ve gönderildi.")
         return
 
-    # Sonraki turlar: yeni/değişen not olursa "KOŞŞŞ" bildirimi
-    for ders, v in yeni.items():
-        if eski.get(ders) != yeni_ozet[ders]:
-            mesaj = (f"🚨 Yeni Sınav Açıklandı KOŞŞŞ 🚨\n\n"
-                     f"{ders} - {v['ad']}\n"
-                     f"Durum: {v['durum']}\n"
-                     f"{v['sinav']}\n"
-                     f"Ort: {v['ort'] or '-'}   Harf: {v['harf'] or '-'}")
-            log.info("Değişiklik: %s", ders)
-            bildir(mesaj)
+    # 1) ANLIK: yeni/değişen not varsa hemen "KOŞŞŞ" bildir (her turda, saatten bağımsız)
+    for ders in degisenler:
+        v = yeni[ders]
+        bildir("🚨 Yeni Sınav Açıklandı KOŞŞŞ 🚨\n\n" + _ders_satiri(ders, v))
+        log.info("Değişiklik: %s", ders)
 
-    durum_kaydet(yeni_ozet)
+    # 2) SAATLİK: 09:00-00:00 arası, her yeni saatte bir durum güncellemesi
+    if saatlik_aktif and son_saatlik != saat_str:
+        if degisenler:
+            baslik = f"📋 Saatlik durum ({now:%H:00}) — yeni not(lar) açıklandı! 🚨"
+        else:
+            baslik = f"✅ Saatlik durum ({now:%H:00}) — yeni bir gelişme yok"
+        bildir(_ozet_mesaji(yeni, baslik))
+        son_saatlik = saat_str
+        log.info("Saatlik durum mesajı gönderildi (%s).", saat_str)
+
+    durum_kaydet(yeni_ozet, son_saatlik)
 
 
 # ----------------------------------------------------------------------
