@@ -38,20 +38,33 @@ except Exception:
 # ----------------------------------------------------------------------
 # AYARLAR
 # ----------------------------------------------------------------------
-# Bilgiler önce ortam değişkeninden (GitHub Secrets) okunur; yoksa aşağıdaki
-# placeholder kullanılır. ÖNEMLİ: Bu dosyayı herkese açık (public) bir GitHub
-# deposuna koyacaksan, aşağıya GERÇEK şifreni YAZMA! Placeholder'ları olduğu
-# gibi bırak, gerçek bilgileri GitHub Secrets'a gir. Sadece kendi bilgisayarında
-# çalıştıracaksan placeholder'ları kendi bilgilerinle değiştirebilirsin.
-USERNAME = os.environ.get("OBS_USER", "ogrenci_no")
-PASSWORD = os.environ.get("OBS_PASS", "obs_sifren")
+# Telegram bilgileri (tek bot, tek alıcı = sen).
 TG_TOKEN = os.environ.get("TG_TOKEN", "botfather_token")
-TG_CHAT  = os.environ.get("TG_CHAT",  "1560146067")     # senin chat_id'n
+TG_CHAT  = os.environ.get("TG_CHAT",  "1560146067")     # mesajların geleceği chat_id
+
+# Takip edilecek kişiler. Her kişi için: ad, OBS öğrenci no, OBS şifresi.
+# İstediğin kadar kişi ekleyebilirsin. ÖNEMLİ: şifreleri rızayla ekle ve
+# bu dosyayı kimseyle paylaşma / public GitHub'a koyma.
+# Değerleri ortam değişkeninden (systemd) de verebilirsin; verilmezse
+# aşağıdaki sabit değerler kullanılır.
+KISILER = [
+    {
+        "ad":   "Mert",
+        "user": os.environ.get("OBS_USER", "ogrenci_no"),
+        "pass": os.environ.get("OBS_PASS", "obs_sifren"),
+    },
+    {
+        "ad":   "Arkadas",                      # arkadaşının adını yaz
+        "user": os.environ.get("OBS2_USER", "arkadas_ogrenci_no"),
+        "pass": os.environ.get("OBS2_PASS", "arkadas_sifre"),
+    },
+]
 
 STUDENT_LOGIN_URL = "https://obs.firat.edu.tr/oibs/std/login.aspx"
 
-STATE_FILE   = "son_durum.json"       # değişiklik takibi için (not değeri TUTMAZ, sadece özet/hash)
-INTERVAL_SEC = 300                    # döngü modunda kaç saniyede bir kontrol (300 = 5 dk)
+# Her kişinin durumu ayrı dosyada tutulur: son_durum_Mert.json gibi.
+STATE_PREFIX = "son_durum_"           # dosya adı öneki (not değeri TUTMAZ, sadece özet/hash)
+INTERVAL_SEC = 60                     # kaç saniyede bir kontrol (60 = 1 dk)
 HEADLESS     = True                   # True = görünmez. Sorun ararken False yap.
 
 logging.basicConfig(
@@ -65,8 +78,8 @@ log = logging.getLogger("obs_bot")
 # ----------------------------------------------------------------------
 # GİRİŞ + NOT SAYFASINI ÇEK  (gerçek tarayıcı motoruyla)
 # ----------------------------------------------------------------------
-def not_sayfasi_html():
-    """Tarayıcı motoruyla giriş yapıp not sayfasının HTML'ini döndürür."""
+def not_sayfasi_html(kullanici, sifre):
+    """Verilen kullanıcı/şifre ile giriş yapıp not sayfasının HTML'ini döndürür."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
         ctx = browser.new_context(
@@ -81,8 +94,8 @@ def not_sayfasi_html():
 
             # 2) Kullanıcı adı / şifre doldur ve giriş yap
             page.wait_for_selector("#username", timeout=30000)
-            page.fill("#username", USERNAME)
-            page.fill("#password", PASSWORD)
+            page.fill("#username", kullanici)
+            page.fill("#password", sifre)
             page.click("input[name='submit']")
 
             # 3) Girişin tamamlanmasını ve uygulamaya inmesini bekle
@@ -188,12 +201,18 @@ def bildir(mesaj):
 # ----------------------------------------------------------------------
 # DURUM KAYDI (JSON)
 # ----------------------------------------------------------------------
-def eski_durum():
-    """{"notlar": {ders: hash}, "son_saatlik": "YYYY-MM-DDTHH"} döndürür.
-    Eski düz format ({ders: hash}) ile de uyumludur."""
-    if os.path.exists(STATE_FILE):
+def _state_dosyasi(kisi_ad):
+    """Her kişi için ayrı durum dosyası: son_durum_Mert.json gibi."""
+    guvenli = "".join(c for c in kisi_ad if c.isalnum() or c in "-_")
+    return f"{STATE_PREFIX}{guvenli}.json"
+
+
+def eski_durum(kisi_ad):
+    """{"notlar": {ders: hash}, "son_saatlik": "YYYY-MM-DDTHH"} döndürür."""
+    yol = _state_dosyasi(kisi_ad)
+    if os.path.exists(yol):
         try:
-            with open(STATE_FILE, encoding="utf-8") as f:
+            with open(yol, encoding="utf-8") as f:
                 d = json.load(f)
             if isinstance(d, dict) and "notlar" in d:
                 return d
@@ -203,8 +222,8 @@ def eski_durum():
     return {"notlar": {}, "son_saatlik": None}
 
 
-def durum_kaydet(notlar_ozet, son_saatlik):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+def durum_kaydet(kisi_ad, notlar_ozet, son_saatlik):
+    with open(_state_dosyasi(kisi_ad), "w", encoding="utf-8") as f:
         json.dump({"notlar": notlar_ozet, "son_saatlik": son_saatlik},
                   f, ensure_ascii=False, indent=2)
 
@@ -244,8 +263,8 @@ def _ozet_mesaji(notlar, baslik):
     return "\n".join(satirlar)
 
 
-def degisiklik_kontrol(yeni):
-    state = eski_durum()
+def degisiklik_kontrol(kisi_ad, yeni):
+    state = eski_durum(kisi_ad)
     eski_notlar = state.get("notlar", {})
     son_saatlik = state.get("son_saatlik")
     ilk_calisma = (len(eski_notlar) == 0)
@@ -260,57 +279,62 @@ def degisiklik_kontrol(yeni):
 
     if ilk_calisma:
         # İlk turda mevcut durumu özetle, saat sayacını da başlat.
-        bildir(_ozet_mesaji(yeni, "📋 Güncel not durumu"))
-        durum_kaydet(yeni_ozet, saat_str)
-        log.info("İlk çalışma: mevcut durum özetlendi ve gönderildi.")
+        bildir(_ozet_mesaji(yeni, f"📋 {kisi_ad} — Güncel not durumu"))
+        durum_kaydet(kisi_ad, yeni_ozet, saat_str)
+        log.info("[%s] İlk çalışma: mevcut durum özetlendi ve gönderildi.", kisi_ad)
         return
 
     # 1) ANLIK: yeni/değişen not varsa hemen "KOŞŞŞ" bildir (her turda, saatten bağımsız)
     for ders in degisenler:
         v = yeni[ders]
-        bildir("🚨 Yeni Sınav Açıklandı KOŞŞŞ 🚨\n\n" + _ders_satiri(ders, v))
-        log.info("Değişiklik: %s", ders)
+        bildir(f"🚨 {kisi_ad} — Yeni Sınav Açıklandı KOŞŞŞ 🚨\n\n" + _ders_satiri(ders, v))
+        log.info("[%s] Değişiklik: %s", kisi_ad, ders)
 
     # 2) SAATLİK: 09:00-00:00 arası, her yeni saatte bir durum güncellemesi
     if saatlik_aktif and son_saatlik != saat_str:
         if degisenler:
-            baslik = f"📋 Saatlik durum ({now:%H:00}) — yeni not(lar) açıklandı! 🚨"
+            baslik = f"📋 {kisi_ad} — Saatlik durum ({now:%H:00}) — yeni not(lar) açıklandı! 🚨"
         else:
-            baslik = f"✅ Saatlik durum ({now:%H:00}) — yeni bir gelişme yok"
+            baslik = f"✅ {kisi_ad} — Saatlik durum ({now:%H:00}) — yeni bir gelişme yok"
         bildir(_ozet_mesaji(yeni, baslik))
         son_saatlik = saat_str
-        log.info("Saatlik durum mesajı gönderildi (%s).", saat_str)
+        log.info("[%s] Saatlik durum mesajı gönderildi (%s).", kisi_ad, saat_str)
 
-    durum_kaydet(yeni_ozet, son_saatlik)
+    durum_kaydet(kisi_ad, yeni_ozet, son_saatlik)
 
 
 # ----------------------------------------------------------------------
 # ANA DÖNGÜ
 # ----------------------------------------------------------------------
+def tek_kisi_kontrol(kisi):
+    """Tek bir kişinin notlarını kontrol edip gerekirse bildirim atar."""
+    ad = kisi["ad"]
+    try:
+        html = not_sayfasi_html(kisi["user"], kisi["pass"])
+        notlar = notlari_parse(html)
+        if notlar is None:
+            log.warning("[%s] Not tablosu alınamadı, atlanıyor.", ad)
+            return
+        log.info("[%s] %d ders okundu.", ad, len(notlar))
+        degisiklik_kontrol(ad, notlar)
+    except Exception as e:
+        log.error("[%s] Hata: %s", ad, e)
+
+
 def tek_kontrol():
-    html = not_sayfasi_html()
-    notlar = notlari_parse(html)
-    if notlar is None:
-        log.warning("Not tablosu alınamadı, bu tur atlanıyor.")
-        return
-    log.info("%d ders okundu.", len(notlar))
-    degisiklik_kontrol(notlar)
+    """Listedeki tüm kişileri sırayla kontrol eder."""
+    for kisi in KISILER:
+        tek_kisi_kontrol(kisi)
 
 
 def main():
-    # RUN_ONCE=1 ise tek tur çalışıp çıkar (GitHub Actions için).
-    # Aksi halde sonsuz döngüde çalışır (kendi bilgisayarın/sunucun için).
-    if os.environ.get("RUN_ONCE") == "1":
-        log.info("Tek seferlik kontrol modu.")
-        tek_kontrol()
-        return
-
-    log.info("Bot başladı. Her %d saniyede bir kontrol edilecek.", INTERVAL_SEC)
+    log.info("Bot başladı. Her %d saniyede bir, %d kişi kontrol edilecek.",
+             INTERVAL_SEC, len(KISILER))
     while True:
         try:
             tek_kontrol()
         except Exception as e:
-            log.error("Hata: %s", e)
+            log.error("Genel hata: %s", e)
         time.sleep(INTERVAL_SEC)
 
 
