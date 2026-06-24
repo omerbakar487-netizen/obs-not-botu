@@ -2,10 +2,9 @@ name: OBS Not Botu
 
 on:
   schedule:
-    # GitHub'ın izin verdiği EN SIK aralık 5 dakikadır (3 dk mümkün değil).
-    # Yoğun saatlerde GitHub birkaç dakika geciktirebilir.
-    # PRIVATE depoda her 5 dk ~3-4 gün, her 15 dk ise ~10+ gün ücretsiz yeter.
-    # PUBLIC depoda sınırsız ücretsizdir.
+    # 15 dakikada bir. GitHub sık aralıkları (5 dk) yoğunlukta atlıyor; 15 dk'yı
+    # çok daha güvenilir çalıştırır. PUBLIC depoda sınırsız ücretsizdir.
+    # Yine de GitHub zamanlanmış işleri birkaç dk geciktirebilir (normaldir).
     - cron: "*/15 * * * *"
   workflow_dispatch:   # GitHub arayüzünden elle de tetikleyebilmek için
 
