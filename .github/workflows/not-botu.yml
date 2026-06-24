@@ -62,7 +62,13 @@ jobs:
             git config user.email "bot@users.noreply.github.com"
             git add son_durum.json
             git commit -m "durum guncellendi"
-            git push
+            # Başka bir çalışma/elle commit araya girmiş olabilir; önce uzaktakini
+            # alıp (rebase) sonra gönder. Çakışmada birkaç kez yeniden dene.
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push origin main && break
+              echo "push denemesi $i başarısız, tekrar deneniyor..."
+              sleep 3
+            done
           else
             echo "Değişiklik yok, kaydedilecek bir şey yok."
           fi
