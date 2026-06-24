@@ -251,6 +251,25 @@ def _ders_satiri(ders, v):
             f"Ort: {v['ort'] or '-'}   Harf: {v['harf'] or '-'}")
 
 
+def _final_girildi_mi(v):
+    """Bu derste gerçek bir final/sonuç notu girilmiş mi?
+    'Final : --' ise henüz yok (False). 'Final : 60' gibi bir sayı varsa True.
+    Ayrıca harf notu girilmişse (BB, CC...) de sonuç açıklanmış sayılır."""
+    sinav = v.get("sinav", "")
+    s = sinav.lower()
+    # "final" kelimesinden sonrasına bak; içinde "--" varsa not yok demektir
+    if "final" in s:
+        sonra = s.split("final", 1)[1]
+        # finalden sonra bir rakam var mı ve "--" yok mu?
+        if "--" not in sonra and any(ch.isdigit() for ch in sonra):
+            return True
+    # Harf notu dolmuşsa (örn. "BB", "CC", "AA") da sonuç açıklanmıştır
+    harf = (v.get("harf") or "").strip()
+    if harf and harf not in ("--", "-"):
+        return True
+    return False
+
+
 def _ozet_mesaji(notlar, baslik):
     satirlar = [baslik + "\n"]
     final_var = False
@@ -295,11 +314,16 @@ def degisiklik_kontrol(kisi, yeni):
         log.info("[%s] İlk çalışma: mevcut durum özetlendi ve gönderildi.", ad)
         return
 
-    # 1) ANLIK: yeni/değişen not varsa hemen "KOŞ" bildir (her turda, saatten bağımsız)
+    # 1) ANLIK: yeni/değişen not varsa "KOŞ" bildir — AMA sadece o derste
+    #    gerçek bir final/sonuç notu girildiyse. "Final : --" ise (henüz yok)
+    #    yanlış alarm olmasın diye mesaj gönderilmez.
     for ders in degisenler:
         v = yeni[ders]
-        bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v))
-        log.info("[%s] Değişiklik: %s", ad, ders)
+        if _final_girildi_mi(v):
+            bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v))
+            log.info("[%s] Final notu açıklandı: %s", ad, ders)
+        else:
+            log.info("[%s] Değişiklik var ama final notu yok, atlanıyor: %s", ad, ders)
 
     # 2) SAATLİK: 09:00-00:00 arası, her yeni saatte bir durum güncellemesi
     if saatlik_aktif and son_saatlik != saat_str:
