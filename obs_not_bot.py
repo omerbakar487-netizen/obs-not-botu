@@ -316,31 +316,23 @@ def degisiklik_kontrol(kisi, yeni):
     son_notlar_kaydet()           # diske de yaz (restart'a dayanıklı)
     state = eski_durum(ad)
     eski_notlar = state.get("notlar", {})
-    son_saatlik = state.get("son_saatlik")
     ilk_calisma = (len(eski_notlar) == 0)
 
     yeni_ozet = {ders: _ozet(v) for ders, v in yeni.items()}
     degisenler = [d for d in yeni if eski_notlar.get(d) != yeni_ozet[d]]
 
-    # Kişiye özel mesaj başlıkları (tanımlı değilse normal şablon kullanılır)
-    kos_baslik    = kisi.get("kos_baslik",    f"🚨 {ad} — Yeni Sınav Açıklandı KOŞŞŞ 🚨")
-    stabil_baslik = kisi.get("stabil_baslik", f"✅ {ad} — yeni bir gelişme yok")
-
-    now = datetime.now(TR)
-    saat_str = now.strftime("%Y-%m-%dT%H")
-    # Saatlik durum mesajı penceresi: 09:00 - 00:00 (yani saat 9..23 ve 00)
-    saatlik_aktif = (now.hour >= 9) or (now.hour == 0)
+    # Kişiye özel "KOŞ" başlığı (tanımlı değilse normal şablon)
+    kos_baslik = kisi.get("kos_baslik", f"🚨 {ad} — Yeni Sınav Açıklandı KOŞŞŞ 🚨")
 
     if ilk_calisma:
-        # İlk turda mevcut durumu özetle, saat sayacını da başlat.
+        # İlk turda mevcut durumu bir kez özetle (sonra saatlik mesaj YOK).
         bildir(_ozet_mesaji(yeni, f"📋 {ad} — Güncel not durumu"))
-        durum_kaydet(ad, yeni_ozet, saat_str)
+        durum_kaydet(ad, yeni_ozet, None)
         log.info("[%s] İlk çalışma: mevcut durum özetlendi ve gönderildi.", ad)
         return
 
-    # 1) ANLIK: yeni/değişen not varsa "KOŞ" bildir — AMA sadece o derste
-    #    gerçek bir final/sonuç notu girildiyse. "Final : --" ise (henüz yok)
-    #    yanlış alarm olmasın diye mesaj gönderilmez.
+    # ANLIK: yeni/değişen not varsa "KOŞ" bildir — AMA sadece o derste
+    # gerçek bir final/sonuç notu girildiyse. "Final : --" ise mesaj gönderilmez.
     for ders in degisenler:
         v = yeni[ders]
         if _final_girildi_mi(v):
@@ -349,17 +341,7 @@ def degisiklik_kontrol(kisi, yeni):
         else:
             log.info("[%s] Değişiklik var ama final notu yok, atlanıyor: %s", ad, ders)
 
-    # 2) SAATLİK: 09:00-00:00 arası, her yeni saatte bir durum güncellemesi
-    if saatlik_aktif and son_saatlik != saat_str:
-        if degisenler:
-            baslik = f"{kos_baslik} ({now:%H:00})"
-        else:
-            baslik = f"{stabil_baslik} ({now:%H:00})"
-        bildir(_ozet_mesaji(yeni, baslik))
-        son_saatlik = saat_str
-        log.info("[%s] Saatlik durum mesajı gönderildi (%s).", ad, saat_str)
-
-    durum_kaydet(ad, yeni_ozet, son_saatlik)
+    durum_kaydet(ad, yeni_ozet, None)
 
 
 # ----------------------------------------------------------------------
