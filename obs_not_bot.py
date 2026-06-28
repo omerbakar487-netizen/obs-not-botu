@@ -58,15 +58,6 @@ KISILER = [
         # Bu kişiye özel mesaj başlıkları (isteğe bağlı):
         "kos_baslik":    "🚨 Koş Falanca Kişi KOOOOŞ 🚨 notun açıklandı",
         "stabil_baslik": "Falanca Kişinin not durumu stabil",
-        # Final notu bu eşiğin ALTINDA ise, ders adına göre özel alay mesajı eklenir.
-        "dusuk_esik": 50,
-        # Ders adında şu anahtar kelimelerden biri geçerse, karşısındaki metin eklenir.
-        # (küçük harfe çevrilip aranır; Türkçe karakterlere dikkat)
-        "dusuk_mesajlar": {
-            "organizasyon": "felekle oçgör paspas etmiş seni paspaas koooş",
-            "mimari":       "felekle oçgör paspas etmiş seni paspaas koooş",
-            "algoritma":    "mamo boruyu vermiş yine paspas olmuşsun kooooş",
-        },
     },
 ]
 
@@ -351,60 +342,6 @@ def _final_girildi_mi(v):
     return False
 
 
-def _tr_normalize(s):
-    """Türkçe karakterleri ASCII'ye indirger ve küçük harfe çevirir.
-    Böylece 'ORGANİZASYONU'.lower() ile oluşan noktalı i sorunu çözülür ve
-    anahtar eşleştirme güvenilir olur."""
-    s = (s or "")
-    cevrim = str.maketrans({
-        "İ": "i", "I": "i", "ı": "i", "i": "i",
-        "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g",
-        "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c",
-    })
-    return s.translate(cevrim).lower()
-
-
-def _final_notu_sayi(v):
-    """Sınav metninden final notunu sayı olarak çıkarır. Yoksa None döner.
-    Örn: 'Vize : 44 Final : 38' -> 38 ; 'Final : --' -> None"""
-    s = v.get("sinav", "")
-    low = s.lower()
-    if "final" not in low:
-        return None
-    sonra = low.split("final", 1)[1]   # finalden sonraki kısım
-    sayi = ""
-    basladi = False
-    for ch in sonra:
-        if ch.isdigit():
-            sayi += ch
-            basladi = True
-        elif basladi:
-            break
-    if sayi:
-        try:
-            return int(sayi)
-        except ValueError:
-            return None
-    return None
-
-
-def _dusuk_not_eki(kisi, v):
-    """Kişiye özel: final notu eşiğin altındaysa ve ders adı bir anahtara
-    uyuyorsa, eklenecek alay metnini döndürür. Yoksa boş string."""
-    esik = kisi.get("dusuk_esik")
-    mesajlar = kisi.get("dusuk_mesajlar")
-    if not esik or not mesajlar:
-        return ""
-    not_sayi = _final_notu_sayi(v)
-    if not_sayi is None or not_sayi >= esik:
-        return ""   # not yok ya da eşik ve üstü -> ek mesaj yok
-    ders_ad = _tr_normalize(v.get("ad"))
-    for anahtar, metin in mesajlar.items():
-        if _tr_normalize(anahtar) in ders_ad:
-            return f"\n\n💬 {metin}"
-    return ""
-
-
 def _ozet_mesaji(notlar, baslik, ad=None):
     satirlar = [baslik + "\n"]
     final_var = False
@@ -452,8 +389,7 @@ def degisiklik_kontrol(kisi, yeni):
     for ders in degisenler:
         v = yeni[ders]
         if _final_girildi_mi(v):
-            ek = _dusuk_not_eki(kisi, v)   # not<eşik ve ders uyuyorsa alay metni
-            bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v) + ek + agno_satiri)
+            bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v) + agno_satiri)
             log.info("[%s] Final notu açıklandı: %s", ad, ders)
         else:
             log.info("[%s] Değişiklik var ama final notu yok, atlanıyor: %s", ad, ders)
@@ -478,6 +414,15 @@ def tek_kisi_kontrol(kisi):
         if agno:
             SON_AGNO[ad] = agno
             son_agno_kaydet()
+
+        # --- TEST MODU --- TEST_FINAL=1 ise ilk dersin final notunu sahte
+        # olarak "60" yapar; bot bunu "yeni final açıklandı" sanıp KOŞ atar.
+        if os.environ.get("TEST_FINAL") == "1" and notlar:
+            ilk_ders = next(iter(notlar))
+            notlar[ilk_ders]["sinav"] = "Vize : 50 Final : 60"
+            notlar[ilk_ders]["harf"]  = "BB"
+            log.info("[%s] TEST MODU: %s dersine sahte final enjekte edildi.",
+                     ad, ilk_ders)
 
         log.info("[%s] %d ders okundu. AGNO: %s", ad, len(notlar), agno or "-")
         degisiklik_kontrol(kisi, notlar)
@@ -548,8 +493,8 @@ def komut_dinle_dongu():
                 gelen_chat = str(msg.get("chat", {}).get("id", ""))
                 if gelen_chat != str(TG_CHAT):
                     continue
-                if metin == "/bekci" or metin.startswith("/bekci@"):
-                    log.info("/bekci komutu alındı, cevap gönderiliyor.")
+                if metin == "/durum" or metin.startswith("/durum@"):
+                    log.info("/durum komutu alındı, cevap gönderiliyor.")
                     bildir(_durum_cevabi())
         except Exception as e:
             log.error("Komut dinleme hatası: %s", e)
