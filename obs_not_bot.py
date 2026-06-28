@@ -58,6 +58,15 @@ KISILER = [
         # Bu kişiye özel mesaj başlıkları (isteğe bağlı):
         "kos_baslik":    "🚨 Koş Falanca Kişi KOOOOŞ 🚨 notun açıklandı",
         "stabil_baslik": "Falanca Kişinin not durumu stabil",
+        # Final notu bu eşiğin ALTINDA ise, ders adına göre özel alay mesajı eklenir.
+        "dusuk_esik": 50,
+        # Ders adında şu anahtar kelimelerden biri geçerse, karşısındaki metin eklenir.
+        # (küçük harfe çevrilip aranır; Türkçe karakterlere dikkat)
+        "dusuk_mesajlar": {
+            "organizasyon": "felekle oçgör paspas etmiş seni paspaas koooş",
+            "mimari":       "felekle oçgör paspas etmiş seni paspaas koooş",
+            "algoritma":    "mamo boruyu vermiş yine paspas olmuşsun kooooş",
+        },
     },
 ]
 
@@ -108,10 +117,37 @@ def not_sayfasi_html(kullanici, sifre):
                                    "olabilir ya da CAPTCHA devreye girdi.")
             log.info("Giriş başarılı.")
 
-            # 4) Not sayfasına MENÜDEN git. "Not Listesi" bağlantısı menüde
+            # 4a) Ana sayfadayken AGNO'yu (Genel Not Ortalaması) oku.
+            #     lblAGNO etiketi index.aspx'te doğrudan yazılı (örn "AGNO: 2,59").
+            agno = None
+            try:
+                agno = page.evaluate("""
+                    () => {
+                        const el = document.getElementById('lblAGNO');
+                        return el ? el.textContent.trim() : null;
+                    }
+                """)
+                # iframe içindeyse orada da ara
+                if not agno:
+                    for fr in page.frames:
+                        try:
+                            v = fr.evaluate("""
+                                () => {
+                                    const el = document.getElementById('lblAGNO');
+                                    return el ? el.textContent.trim() : null;
+                                }
+                            """)
+                        except Exception:
+                            v = None
+                        if v:
+                            agno = v
+                            break
+            except Exception:
+                agno = None
+
+            # 4b) Not sayfasına MENÜDEN git. "Not Listesi" bağlantısı menüde
             #    görünür olmadığı için tıklanamıyor; bunun yerine o bağlantının
             #    onclick'inde çağrılan JS'i (menu_close(...)) doğrudan çalıştırıyoruz.
-            #    Bu, sistemin not sayfasını doğru anahtarla açmasını sağlar.
             tiklandi = page.evaluate("""
                 () => {
                     const linkler = Array.from(document.querySelectorAll('a'));
@@ -148,7 +184,7 @@ def not_sayfasi_html(kullanici, sifre):
 
             if html is None:
                 html = page.content()        # son çare: ana sayfanın tamamı
-            return html
+            return html, agno
         finally:
             browser.close()
 
@@ -191,6 +227,28 @@ def notlari_parse(html):
 # bunu anında yazar. Örn: {"Mert": {ders: {...}}, "Falanca Kişi": {...}}
 SON_NOTLAR = {}
 SON_NOTLAR_DOSYA = "son_notlar.json"   # restart sonrası da /durum çalışsın diye
+
+# Her kişinin son bilinen AGNO'su (Genel Not Ortalaması). Örn {"Mert": "AGNO: 2,59"}
+SON_AGNO = {}
+SON_AGNO_DOSYA = "son_agno.json"
+
+
+def son_agno_kaydet():
+    try:
+        with open(SON_AGNO_DOSYA, "w", encoding="utf-8") as f:
+            json.dump(SON_AGNO, f, ensure_ascii=False)
+    except Exception as e:
+        log.error("AGNO diske yazılamadı: %s", e)
+
+
+def son_agno_yukle():
+    global SON_AGNO
+    try:
+        if os.path.exists(SON_AGNO_DOSYA):
+            with open(SON_AGNO_DOSYA, encoding="utf-8") as f:
+                SON_AGNO = json.load(f)
+    except Exception as e:
+        log.error("AGNO yüklenemedi: %s", e)
 
 
 def son_notlar_kaydet():
@@ -293,7 +351,61 @@ def _final_girildi_mi(v):
     return False
 
 
-def _ozet_mesaji(notlar, baslik):
+def _tr_normalize(s):
+    """Türkçe karakterleri ASCII'ye indirger ve küçük harfe çevirir.
+    Böylece 'ORGANİZASYONU'.lower() ile oluşan noktalı i sorunu çözülür ve
+    anahtar eşleştirme güvenilir olur."""
+    s = (s or "")
+    cevrim = str.maketrans({
+        "İ": "i", "I": "i", "ı": "i", "i": "i",
+        "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g",
+        "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c",
+    })
+    return s.translate(cevrim).lower()
+
+
+def _final_notu_sayi(v):
+    """Sınav metninden final notunu sayı olarak çıkarır. Yoksa None döner.
+    Örn: 'Vize : 44 Final : 38' -> 38 ; 'Final : --' -> None"""
+    s = v.get("sinav", "")
+    low = s.lower()
+    if "final" not in low:
+        return None
+    sonra = low.split("final", 1)[1]   # finalden sonraki kısım
+    sayi = ""
+    basladi = False
+    for ch in sonra:
+        if ch.isdigit():
+            sayi += ch
+            basladi = True
+        elif basladi:
+            break
+    if sayi:
+        try:
+            return int(sayi)
+        except ValueError:
+            return None
+    return None
+
+
+def _dusuk_not_eki(kisi, v):
+    """Kişiye özel: final notu eşiğin altındaysa ve ders adı bir anahtara
+    uyuyorsa, eklenecek alay metnini döndürür. Yoksa boş string."""
+    esik = kisi.get("dusuk_esik")
+    mesajlar = kisi.get("dusuk_mesajlar")
+    if not esik or not mesajlar:
+        return ""
+    not_sayi = _final_notu_sayi(v)
+    if not_sayi is None or not_sayi >= esik:
+        return ""   # not yok ya da eşik ve üstü -> ek mesaj yok
+    ders_ad = _tr_normalize(v.get("ad"))
+    for anahtar, metin in mesajlar.items():
+        if _tr_normalize(anahtar) in ders_ad:
+            return f"\n\n💬 {metin}"
+    return ""
+
+
+def _ozet_mesaji(notlar, baslik, ad=None):
     satirlar = [baslik + "\n"]
     final_var = False
     for ders, v in notlar.items():
@@ -307,6 +419,9 @@ def _ozet_mesaji(notlar, baslik):
     else:
         satirlar.append("\nℹ️ Şu anda sadece vize notları var, final/sonuç "
                         "notu henüz açıklanmamış.")
+    # AGNO'yu en sona ekle (biliniyorsa)
+    if ad and SON_AGNO.get(ad):
+        satirlar.append(f"\n📊 {SON_AGNO[ad]}")
     return "\n".join(satirlar)
 
 
@@ -326,17 +441,19 @@ def degisiklik_kontrol(kisi, yeni):
 
     if ilk_calisma:
         # İlk turda mevcut durumu bir kez özetle (sonra saatlik mesaj YOK).
-        bildir(_ozet_mesaji(yeni, f"📋 {ad} — Güncel not durumu"))
+        bildir(_ozet_mesaji(yeni, f"📋 {ad} — Güncel not durumu", ad))
         durum_kaydet(ad, yeni_ozet, None)
         log.info("[%s] İlk çalışma: mevcut durum özetlendi ve gönderildi.", ad)
         return
 
     # ANLIK: yeni/değişen not varsa "KOŞ" bildir — AMA sadece o derste
     # gerçek bir final/sonuç notu girildiyse. "Final : --" ise mesaj gönderilmez.
+    agno_satiri = f"\n\n📊 {SON_AGNO[ad]}" if SON_AGNO.get(ad) else ""
     for ders in degisenler:
         v = yeni[ders]
         if _final_girildi_mi(v):
-            bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v))
+            ek = _dusuk_not_eki(kisi, v)   # not<eşik ve ders uyuyorsa alay metni
+            bildir(f"{kos_baslik}\n\n" + _ders_satiri(ders, v) + ek + agno_satiri)
             log.info("[%s] Final notu açıklandı: %s", ad, ders)
         else:
             log.info("[%s] Değişiklik var ama final notu yok, atlanıyor: %s", ad, ders)
@@ -351,12 +468,18 @@ def tek_kisi_kontrol(kisi):
     """Tek bir kişinin notlarını kontrol edip gerekirse bildirim atar."""
     ad = kisi["ad"]
     try:
-        html = not_sayfasi_html(kisi["user"], kisi["pass"])
+        html, agno = not_sayfasi_html(kisi["user"], kisi["pass"])
         notlar = notlari_parse(html)
         if notlar is None:
             log.warning("[%s] Not tablosu alınamadı, atlanıyor.", ad)
             return
-        log.info("[%s] %d ders okundu.", ad, len(notlar))
+
+        # AGNO'yu sakla (okunabildiyse). /durum ve KOŞ mesajlarında gösterilir.
+        if agno:
+            SON_AGNO[ad] = agno
+            son_agno_kaydet()
+
+        log.info("[%s] %d ders okundu. AGNO: %s", ad, len(notlar), agno or "-")
         degisiklik_kontrol(kisi, notlar)
     except Exception as e:
         log.error("[%s] Hata: %s", ad, e)
@@ -384,7 +507,7 @@ def _durum_cevabi():
                 "Bir dakika içinde tekrar dene.")
     parcalar = []
     for ad, notlar in SON_NOTLAR.items():
-        parcalar.append(_ozet_mesaji(notlar, f"📋 {ad} — Son bilinen durum"))
+        parcalar.append(_ozet_mesaji(notlar, f"📋 {ad} — Son bilinen durum", ad))
     return "\n\n———\n\n".join(parcalar)
 
 
@@ -450,16 +573,22 @@ def main():
     log.info("Bot başladı. Her %d saniyede bir, %d kişi kontrol edilecek.",
              INTERVAL_SEC, len(KISILER))
     son_notlar_yukle()    # restart sonrası /durum hemen cevap verebilsin
+    son_agno_yukle()      # AGNO da restart'a dayanıklı olsun
     # Komut dinleyiciyi ayrı thread'de başlat (çökerse kendini toparlar)
     _komut_dinleyici_baslat()
 
-    # Ana döngü: belirli aralıklarla not kontrolü
+    # Ana döngü: her tur tam INTERVAL_SEC aralıkla BAŞLAR (tur süresi düşülür).
     while True:
+        tur_basi = time.time()
         try:
             tek_kontrol()
         except Exception as e:
             log.error("Genel hata: %s", e)
-        time.sleep(INTERVAL_SEC)
+        # Turun ne kadar sürdüğünü düş, kalan kadar uyu (negatifse hemen devam et)
+        gecen = time.time() - tur_basi
+        kalan = INTERVAL_SEC - gecen
+        if kalan > 0:
+            time.sleep(kalan)
 
 
 if __name__ == "__main__":
