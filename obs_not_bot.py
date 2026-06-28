@@ -425,8 +425,8 @@ def komut_dinle_dongu():
                 gelen_chat = str(msg.get("chat", {}).get("id", ""))
                 if gelen_chat != str(TG_CHAT):
                     continue
-                if metin == "/durum" or metin.startswith("/durum@"):
-                    log.info("/durum komutu alındı, cevap gönderiliyor.")
+                if metin == "/bekci" or metin.startswith("/bekci@"):
+                    log.info("/bekci komutu alındı, cevap gönderiliyor.")
                     bildir(_durum_cevabi())
         except Exception as e:
             log.error("Komut dinleme hatası: %s", e)
