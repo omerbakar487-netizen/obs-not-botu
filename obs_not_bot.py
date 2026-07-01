@@ -318,11 +318,19 @@ def durum_kaydet(kisi_ad, notlar_ozet, son_saatlik):
 # KARŞILAŞTIR VE BİLDİR
 # ----------------------------------------------------------------------
 def _ozet(v):
-    """Bir dersin not bilgisinin geri döndürülemez özetini (hash) üretir.
-    Böylece kaydedilen dosyada notların kendisi tutulmaz, sadece değişip
-    değişmediğini anlamaya yarayan parmak izi tutulur."""
-    metin = json.dumps(v, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(metin.encode("utf-8")).hexdigest()
+    """Bir dersin not durumunun geri döndürülemez özetini (hash) üretir.
+    ÖNEMLİ: Ham metni değil, sadece ANLAMLI not değerlerini (vize/final/büt
+    sayıları + harf) hash'ler. Böylece 'Büt : --' gibi boş bir alanın sonradan
+    eklenmesi ya da durum metninin ('...Sonuçlandırılmadı') değişmesi
+    "değişiklik" sayılmaz; sadece gerçek bir not girilince hash değişir."""
+    vize  = _sinav_notu(v, "vize")
+    final = _sinav_notu(v, "final")
+    but   = _sinav_notu(v, "büt")
+    harf  = (v.get("harf") or "").strip()
+    if harf in ("--", "-"):
+        harf = ""
+    imza = f"vize={vize}|final={final}|but={but}|harf={harf}"
+    return hashlib.sha256(imza.encode("utf-8")).hexdigest()
 
 
 def _ders_satiri(ders, v):
@@ -333,22 +341,44 @@ def _ders_satiri(ders, v):
 
 
 def _final_girildi_mi(v):
-    """Bu derste gerçek bir final/sonuç notu girilmiş mi?
-    'Final : --' ise henüz yok (False). 'Final : 60' gibi bir sayı varsa True.
-    Ayrıca harf notu girilmişse (BB, CC...) de sonuç açıklanmış sayılır."""
-    sinav = v.get("sinav", "")
-    s = sinav.lower()
-    # "final" kelimesinden sonrasına bak; içinde "--" varsa not yok demektir
-    if "final" in s:
-        sonra = s.split("final", 1)[1]
-        # finalden sonra bir rakam var mı ve "--" yok mu?
-        if "--" not in sonra and any(ch.isdigit() for ch in sonra):
-            return True
-    # Harf notu dolmuşsa (örn. "BB", "CC", "AA") da sonuç açıklanmıştır
+    """Bu derste gerçek bir SONUÇ notu (final VEYA büt) girilmiş mi?
+    Sadece 'Büt : --' gibi boş alanın eklenmesi bildirim TETİKLEMEZ.
+    Final veya büt bir sayıysa, ya da harf notu dolmuşsa True."""
+    if _sinav_notu(v, "final") is not None:
+        return True
+    if _sinav_notu(v, "büt") is not None:
+        return True
     harf = (v.get("harf") or "").strip()
     if harf and harf not in ("--", "-"):
         return True
     return False
+
+
+def _sinav_notu(v, sinav_adi):
+    """Sınav metninden belirtilen sınavın (final/büt/vize) notunu sayı olarak
+    çıkarır. Yoksa veya '--' ise None döner.
+    Örn: 'Vize : 25 Final : 45 Büt : --' -> 'büt' None, 'final' 45"""
+    s = _tr_normalize(v.get("sinav"))
+    anahtar = _tr_normalize(sinav_adi)
+    if anahtar not in s:
+        return None
+    sonra = s.split(anahtar, 1)[1]
+    sayi = ""
+    basladi = False
+    for ch in sonra:
+        if ch.isdigit():
+            sayi += ch
+            basladi = True
+        elif basladi:
+            break
+        elif ch == "-":
+            return None      # rakamdan önce "-" (yani --) gelirse not yok
+    if sayi:
+        try:
+            return int(sayi)
+        except ValueError:
+            return None
+    return None
 
 
 def _tr_normalize(s):
