@@ -72,6 +72,10 @@ KISILER = [
 
 STUDENT_LOGIN_URL = "https://obs.firat.edu.tr/oibs/std/login.aspx"
 
+# Bölüm duyuruları sayfası (herkese açık, giriş gerektirmez).
+DUYURU_URL   = "https://bilgisayarmf.firat.edu.tr/announcements-all"
+DUYURU_STATE = "son_duyurular.json"   # görülen duyuru ID'leri burada tutulur
+
 # Her kişinin durumu ayrı dosyada tutulur: son_durum_Mert.json gibi.
 STATE_PREFIX = "son_durum_"           # dosya adı öneki (not değeri TUTMAZ, sadece özet/hash)
 INTERVAL_SEC = 60                     # kaç saniyede bir kontrol (60 = 1 dk)
@@ -522,6 +526,92 @@ def tek_kontrol():
 
 
 # ----------------------------------------------------------------------
+# BÖLÜM DUYURULARI (bilgisayarmf.firat.edu.tr)
+# ----------------------------------------------------------------------
+def _gorulen_duyurular():
+    """Daha önce bildirilen duyuru ID'lerini (set) döndürür."""
+    if os.path.exists(DUYURU_STATE):
+        try:
+            with open(DUYURU_STATE, encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+
+def _duyurular_kaydet(id_set):
+    try:
+        with open(DUYURU_STATE, "w", encoding="utf-8") as f:
+            # en fazla son 200 ID'yi tut (dosya şişmesin)
+            json.dump(list(id_set)[-200:], f, ensure_ascii=False)
+    except Exception as e:
+        log.error("Duyuru durumu yazılamadı: %s", e)
+
+
+def duyurulari_cek():
+    """Duyuru sayfasını çekip [(id, baslik_ozet, link), ...] listesi döndürür.
+    En yeni duyuru en başta olur."""
+    try:
+        r = requests.get(DUYURU_URL, timeout=30, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; ObsBot/1.0)"
+        })
+        r.encoding = "utf-8"
+        soup = BeautifulSoup(r.text, "html.parser")
+    except Exception as e:
+        log.error("Duyuru sayfası çekilemedi: %s", e)
+        return []
+
+    duyurular = []
+    gorulen_id = set()
+    # Duyuru detay linkleri: .../announcements-detail/<ID>
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "announcements-detail/" not in href:
+            continue
+        did = href.rstrip("/").split("announcements-detail/")[-1]
+        if not did.isdigit() or did in gorulen_id:
+            continue
+        gorulen_id.add(did)
+        metin = a.get_text(" ", strip=True)
+        metin = " ".join(metin.split())      # fazla boşlukları sadeleştir
+        if not href.startswith("http"):
+            href = "https://bilgisayarmf.firat.edu.tr/" + href.lstrip("/")
+        duyurular.append((did, metin, href))
+    return duyurular
+
+
+def duyuru_kontrol():
+    """Yeni duyuru varsa gruba bildirir. İlk çalışmada sessizce kaydeder."""
+    duyurular = duyurulari_cek()
+    if not duyurular:
+        return
+    gorulen = _gorulen_duyurular()
+    ilk_calisma = (len(gorulen) == 0)
+
+    # Sayfadaki tüm ID'ler (kaydedilecek)
+    tum_idler = gorulen | {d[0] for d in duyurular}
+
+    if ilk_calisma:
+        # İlk turda mesaj atma; mevcut duyuruları "görüldü" olarak kaydet.
+        _duyurular_kaydet(tum_idler)
+        log.info("Duyurular ilk kez okundu (%d adet), sessizce kaydedildi.",
+                 len(duyurular))
+        return
+
+    # Yeni (daha önce görülmemiş) duyuruları bul. En eskiden yeniye doğru bildir
+    # ki grupta sıralama düzgün olsun.
+    yeniler = [d for d in duyurular if d[0] not in gorulen]
+    for did, metin, link in reversed(yeniler):
+        # Başlık + özet çok uzunsa kısalt (Telegram'da okunur kalsın)
+        if len(metin) > 600:
+            metin = metin[:600] + "…"
+        bildir(f"📢 Yeni Bölüm Duyurusu\n\n{metin}\n\n🔗 {link}")
+        log.info("Yeni duyuru bildirildi: %s", did)
+
+    _duyurular_kaydet(tum_idler)
+
+
+# ----------------------------------------------------------------------
 # /durum KOMUTU DİNLEME
 # ----------------------------------------------------------------------
 # Telegram'dan en son işlenen güncelleme kimliği (aynı komutu tekrar tekrar
@@ -614,6 +704,10 @@ def main():
             tek_kontrol()
         except Exception as e:
             log.error("Genel hata: %s", e)
+        try:
+            duyuru_kontrol()      # bölüm duyurularını da kontrol et
+        except Exception as e:
+            log.error("Duyuru kontrol hatası: %s", e)
         # Turun ne kadar sürdüğünü düş, kalan kadar uyu (negatifse hemen devam et)
         gecen = time.time() - tur_basi
         kalan = INTERVAL_SEC - gecen
